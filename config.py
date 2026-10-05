@@ -1,12 +1,24 @@
 """Shared configuration for Lab 18."""
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # --- API Keys ---
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+# Lab 18 uses Groq exclusively (the student has no OpenAI key). The Groq endpoint is
+# OpenAI-compatible, so the existing `openai` client is reused with a custom
+# base_url and the model id below. No OpenAI API key is read anywhere in the project.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_BASE_URL = os.getenv(
+    "GROQ_BASE_URL",
+    "https://api.groq.com/openai/v1"
+)
+GROQ_MODEL = os.getenv(
+    "GROQ_MODEL",
+    "openai/gpt-oss-120b"
+)
 
 # --- Qdrant ---
 QDRANT_HOST = "localhost"
@@ -17,6 +29,7 @@ NAIVE_COLLECTION = "lab18_naive"
 # --- Embedding ---
 EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_DIM = 1024
+SEMANTIC_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # --- Chunking ---
 HIERARCHICAL_PARENT_SIZE = 2048

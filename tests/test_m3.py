@@ -1,7 +1,9 @@
 """Tests for Module 3: Reranking."""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from src.m3_rerank import CrossEncoderReranker, benchmark_reranker, RerankResult
+from src.m3_rerank import CrossEncoderReranker, RerankResult, benchmark_reranker
 
 Q = "Nhân viên được nghỉ phép bao nhiêu ngày?"
 DOCS = [

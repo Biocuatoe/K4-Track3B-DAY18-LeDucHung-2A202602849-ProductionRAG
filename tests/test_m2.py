@@ -1,7 +1,14 @@
 """Tests for Module 2: Hybrid Search."""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from src.m2_search import segment_vietnamese, BM25Search, reciprocal_rank_fusion, SearchResult
+from src.m2_search import (
+    BM25Search,
+    SearchResult,
+    reciprocal_rank_fusion,
+    segment_vietnamese,
+)
 
 CHUNKS = [
     {"text": "Nhân viên được nghỉ phép năm 12 ngày.", "metadata": {"source": "policy"}},

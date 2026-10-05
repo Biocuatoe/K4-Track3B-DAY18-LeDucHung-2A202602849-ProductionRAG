@@ -2,10 +2,20 @@
 Basic RAG Baseline — Chạy TRƯỚC để có scores so sánh.
 =====================================================
 Basic = paragraph chunking + dense-only search (không hybrid, không rerank, không enrichment).
-Đây là RAG đã học ở buổi trước — hôm nay sẽ cải thiện từng bước.
+Đây là RAG đã học ở buổi trước — hôm nay production pipeline sẽ cải thiến từng bước.
+
+Cố ý GIỮ NGUYÊN mức độ "naive" để phép so sánh là công bằng:
+  - chunking: paragraph (chunk_basic) — không phân tích ngữ nghĩa/cấu trúc
+  - search:   dense-only — không BM25, không RRF
+  - answer:   prompt 1 câu đơn giản (không grounding mạnh, không xử lý phiên bản tài liệu)
+  - KHÔNG rerank, KHÔNG enrichment
 """
 
-import sys, os, time
+import math
+import os
+import sys
+import time
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
@@ -13,10 +23,14 @@ if hasattr(sys.stderr, "reconfigure"):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.m1_chunking import load_documents, chunk_basic
+from config import EMBEDDING_MODEL, NAIVE_COLLECTION
+from src.llm_client import chat, groq_available, provider_info
+from src.m1_chunking import chunk_basic, load_documents
 from src.m2_search import DenseSearch
-from src.m4_eval import load_test_set, evaluate_ragas, save_report
-from config import NAIVE_COLLECTION
+from src.m4_eval import evaluate_ragas, load_test_set, save_report
+
+# Prompt naive — cố tình đơn giản, đây là baseline chứ không phải production.
+NAIVE_SYSTEM_PROMPT = "Trả lời CHỈ dựa trên context. Nếu không có → nói 'Không tìm thấy.'"
 
 
 def main():
@@ -25,6 +39,7 @@ def main():
     print("(paragraph chunking + dense-only, no rerank, no enrichment)")
     print("=" * 60)
 
+    t0 = time.time()
     docs = load_documents()
     chunks = []
     for doc in docs:
@@ -32,49 +47,75 @@ def main():
             chunks.append({"text": c.text, "metadata": c.metadata})
     print(f"  {len(chunks)} basic paragraph chunks")
 
+    t_index = time.time()
     search = DenseSearch()
     search.index(chunks, collection=NAIVE_COLLECTION)
+    index_ms = (time.time() - t_index) * 1000
 
     test_set = load_test_set()
     questions, answers, all_contexts, ground_truths = [], [], [], []
-
-    from config import OPENAI_API_KEY
-    llm_client = None
-    if OPENAI_API_KEY:
-        from openai import OpenAI
-        llm_client = OpenAI()
+    has_key = groq_available()
 
     for i, item in enumerate(test_set):
         results = search.search(item["question"], top_k=3, collection=NAIVE_COLLECTION)
         contexts = [r.text for r in results]
 
-        if llm_client and contexts:
-            try:
-                context_str = "\n\n".join(contexts)
-                resp = llm_client.chat.completions.create(model="gpt-4o-mini", messages=[
-                    {"role": "system", "content": "Trả lời CHỈ dựa trên context. Nếu không có → nói 'Không tìm thấy.'"},
-                    {"role": "user", "content": f"Context:\n{context_str}\n\nCâu hỏi: {item['question']}"},
-                ])
-                answer = resp.choices[0].message.content
-            except Exception:
-                answer = contexts[0]
-        else:
+        answer = None
+        if has_key and contexts:
+            answer = chat(
+                NAIVE_SYSTEM_PROMPT,
+                "Context:\n" + "\n\n".join(contexts) + f"\n\nCâu hỏi: {item['question']}",
+                max_tokens=400,
+            )
+        if not answer:
+            # Không có key hoặc call lỗi → baseline rơi về trích nguyên văn passage đầu.
             answer = contexts[0] if contexts else "Không tìm thấy."
 
         answers.append(answer)
         questions.append(item["question"])
         all_contexts.append(contexts)
         ground_truths.append(item["ground_truth"])
-        print(f"  [{i+1}/{len(test_set)}] {item['question'][:50]}...", flush=True)
+        print(f"  [{i + 1}/{len(test_set)}] {item['question'][:50]}...", flush=True)
 
+    t_eval = time.time()
     results = evaluate_ragas(questions, answers, all_contexts, ground_truths)
+    eval_ms = (time.time() - t_eval) * 1000
+
     print("\nBASIC BASELINE SCORES")
     for m in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]:
-        print(f"  {m}: {results.get(m, 0):.4f}")
-    save_report(results, [], path="reports/naive_baseline_report.json")
-    if all(results.get(m, 0) == 0 for m in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]):
-        print("\n💡 Lưu ý: Điểm baseline hiển thị 0.00 là bình thường khi chưa hoàn thiện M2 (Dense Search) và M4 (Eval).")
-        print("   Sau khi bạn implement xong các module, hãy chạy 'python main.py' để tự động cập nhật baseline thật và so sánh.")
+        raw = results.get(m)
+        # None/NaN = judge unavailable (rate-limit/API error), NOT a real 0.0.
+        if raw is None or (isinstance(raw, float) and math.isnan(raw)):
+            print(f"  {m}: n/a (judge unavailable)")
+            continue
+        print(f"  {m}: {float(raw):.4f}")
+    print(f"  status: {results.get('status', 'unknown')}")
+    if results.get("status") == "degraded":
+        cov = results.get("metric_coverage", {})
+        bad = ", ".join(
+            f"{k} {v['n_measured']}/{v['n_total']}"
+            for k, v in cov.items() if v.get("coverage", 1.0) < 1.0
+        )
+        print(f"  ⚠️  DEGRADED — not fully measured: {bad}")
+
+    save_report(
+        results,
+        [],
+        path="reports/naive_baseline_report.json",
+        latency_breakdown_ms={
+            "document_loading_and_chunking": (t_index - t0) * 1000,
+            "indexing": index_ms,
+            "retrieval_and_answer_generation": max(
+                (t_eval - t_index - eval_ms) * 1000, 0.0
+            ),
+            "ragas_evaluation": eval_ms,
+        },
+        provider_info={
+            **provider_info(),
+            "embedding_model": EMBEDDING_MODEL,
+            "reranker_model": None,
+        },
+    )
     print("\nDone! Now implement advanced modules and run: python main.py")
 
 

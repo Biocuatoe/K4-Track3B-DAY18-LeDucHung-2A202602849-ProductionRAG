@@ -1,0 +1,17 @@
+# Cấu hình ruff cho Lab 18: Production RAG Pipeline.
+# Chỉ bật rule thực sự liên quan tới chất lượng code (không style-only).
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "W"]
+
+[lint.per-file-ignores]
+# Các module scaffold buộc phải reconfigure stdout rồi mới `sys.path.insert`
+# trước khi import từ `config` / `src.*`, nên import không nằm đầu file.
+"src/*.py" = ["E402", "BLE001"]
+"naive_baseline.py" = ["E402"]
+"main.py" = ["E402"]
+"check_lab.py" = ["E402"]
+"tests/*.py" = ["E402", "B011"]
+
+[lint.isort]
+known-first-party = ["config", "src"]

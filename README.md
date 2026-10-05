@@ -19,9 +19,14 @@ Xem **ASSIGNMENT.md** để biết chi tiết từng module và timeline.
 
 | Dependency | Bắt buộc? | Dùng cho |
 |-----------|-----------|----------|
-| Docker (Qdrant) | ✅ Có | M2 Dense Search |
+| Docker (Qdrant) | ⚠️ Nên có | M2 Dense Search (thiếu thì tự fallback sang in-memory) |
 | Python 3.11+ | ✅ Có | Tất cả modules (RAGAS cần 3.11+ cho asyncio) |
-| `OPENAI_API_KEY` | ⚠️ M4+M5 | RAGAS eval (M4), Enrichment LLM (M5) |
+| `GROQ_API_KEY` | ✅ Có | RAGAS eval (M4), Enrichment LLM (M5), sinh câu trả lời |
+
+> **Provider: Groq (không dùng OpenAI).** Toàn bộ LLM trong bài chạy qua endpoint
+> OpenAI-compatible của Groq với model `openai/gpt-oss-120b`:
+> `https://api.groq.com/openai/v1`. Lấy key miễn phí tại
+> [console.groq.com/keys](https://console.groq.com/keys). **Không cần OpenAI key.**
 
 **Pre-download models** (tránh timeout trong lab):
 ```bash
@@ -29,6 +34,10 @@ python -c "from sentence_transformers import SentenceTransformer; SentenceTransf
 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
 python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-v2-m3')"
 ```
+
+> **Môi trường không có Docker/Qdrant?** `DenseSearch` tự động fallback sang
+> Qdrant in-memory (`QdrantClient(":memory:")`) — dense search vẫn chạy thật,
+> chỉ mất tính bền vững dữ liệu giữa các lần chạy.
 
 ## Quick Start
 
@@ -57,7 +66,7 @@ python -m venv .venv
 ```bash
 docker compose up -d                    # Khởi động Qdrant vector database
 pip install -r requirements.txt
-cp .env.example .env                    # Tạo file .env và điền OPENAI_API_KEY
+cp .env.example .env                    # Tạo file .env và điền GROQ_API_KEY
 python naive_baseline.py                # Khởi tạo baseline
 ```
 
@@ -65,10 +74,19 @@ python naive_baseline.py                # Khởi tạo baseline
 ```powershell
 docker compose up -d                    # Khởi động Qdrant vector database
 pip install -r requirements.txt
-Copy-Item .env.example .env             # Tạo file .env và điền OPENAI_API_KEY
+Copy-Item .env.example .env             # Tạo file .env và điền GROQ_API_KEY
 python naive_baseline.py                # Khởi tạo baseline
 ```
 *(Nếu dùng Windows CMD: dùng `copy .env.example .env` thay cho `Copy-Item`)*
+
+### 3. Chạy từng module (optional)
+
+```bash
+python src/m1_chunking.py               # So sánh 4 chiến lược chunking
+python src/m2_search.py                 # Kiểm tra Vietnamese segmentation
+python src/m3_rerank.py                 # Rerank + benchmark latency
+python src/m5_enrichment.py             # Demo enrichment
+```
 
 ## Chạy toàn bộ & Kiểm tra
 
@@ -104,12 +122,13 @@ K4-Track3B-Production-RAG/
 │   └── Nghi_dinh_so_13-2023_ve_bao_ve_du_lieu_ca_nhan_508ee.pdf # Nghị định BVDL (scan, cần OCR)
 ├── test_set.json               # 20 Q&A pairs (6 types: lookup, version, negation, multi-hop, numeric, ambiguous)
 │
-├── src/                        # ★ Scaffold code (có TODO markers)
+├── src/                        # ★ 5 modules + pipeline (đã implement đầy đủ)
 │   ├── m1_chunking.py          # Module 1: Chunking
 │   ├── m2_search.py            # Module 2: Hybrid Search
 │   ├── m3_rerank.py            # Module 3: Reranking
 │   ├── m4_eval.py              # Module 4: Evaluation
 │   ├── m5_enrichment.py        # Module 5: Enrichment Pipeline
+│   ├── llm_client.py           # Groq client dùng chung (M4 + M5 + pipeline)
 │   └── pipeline.py             # Ghép toàn bộ pipeline
 │
 ├── tests/                      # Auto-grading
@@ -140,6 +159,33 @@ K4-Track3B-Production-RAG/
 | 90 phút | Implement M1 → M2 → M3 → M4 → M5 |
 | 20 phút | Chạy pipeline + RAGAS + failure analysis |
 | 30 phút | Reflection: lecture mapping + project plan |
+
+## Cấu hình LLM (Groq)
+
+Toàn bộ bài dùng **một provider duy nhất: Groq**, qua endpoint OpenAI-compatible
+và model `openai/gpt-oss-120b`.
+
+| Biến môi trường | Giá trị mặc định | Dùng ở đâu |
+|---|---|---|
+| `GROQ_API_KEY` | *(bắt buộc — lấy từ [console.groq.com/keys](https://console.groq.com/keys))* | M4 (RAGAS), M5 (enrichment), sinh câu trả lời |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | `src/llm_client.py` |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | `src/llm_client.py` |
+
+Client được tạo 1 lần và cache lại trong `src/llm_client.py`:
+
+```python
+from openai import OpenAI
+client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
+```
+
+**Không cần OpenAI API key.** Nếu thiếu `GROQ_API_KEY`:
+- M5 tự dùng fallback xác định (extractive summary, HyQA sinh từ câu, contextual prefix, metadata theo keyword).
+- M4 đánh dấu `status = "skipped_no_api_key"` và **không** bịa số liệu.
+- LLM answer generation trả về passage liên quan nhất thay vì bịa nội dung.
+
+Các model khác dùng cho embedding/reranking (chạy local, không cần key):
+`BAAI/bge-m3` (dense embedding, 1024 chiều), `all-MiniLM-L6-v2` (semantic chunking),
+`BAAI/bge-reranker-v2-m3` (cross-encoder reranking).
 
 ## Quy chuẩn đặt tên Repository & Nộp bài
 

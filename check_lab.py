@@ -7,8 +7,8 @@ Chạy: python check_lab.py
 
 import json
 import os
-import sys
 import subprocess
+import sys
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")

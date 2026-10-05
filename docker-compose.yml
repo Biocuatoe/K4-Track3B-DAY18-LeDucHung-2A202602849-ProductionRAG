@@ -1,6 +1,7 @@
 services:
   qdrant:
     image: qdrant/qdrant:latest
+    container_name: lab18-qdrant
     ports:
       - "6333:6333"
       - "6334:6334"
